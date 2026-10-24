@@ -2,11 +2,13 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -47,8 +49,9 @@ func serveShared(real string, args, env []string, stateDir string) int {
 		"--listen", url, "--ws-auth", "capability-token", "--ws-token-file", tokenFile)
 	srv := exec.Command(real, srvArgs...)
 	srv.Env = env
-	srv.Stdout = os.Stderr
-	srv.Stderr = os.Stderr
+	srvLog := io.MultiWriter(os.Stderr, log.Writer())
+	srv.Stdout = srvLog
+	srv.Stderr = srvLog
 	if err := srv.Start(); err != nil {
 		log.Printf("start server: %v; running the app-server unshared", err)
 		return passthrough(real, args, env)
@@ -158,9 +161,15 @@ func bridge(conn *wsConn) chan string {
 	done := make(chan string, 2)
 	go func() { // stdin -> server
 		r := bufio.NewReaderSize(os.Stdin, 1<<20)
+		first := true
 		for {
 			line, err := r.ReadBytes('\n')
 			line = trimEOL(line)
+			if first {
+				// .NET writers prefix redirected UTF-8 stdin with a byte order mark.
+				line = bytes.TrimPrefix(line, []byte("\xEF\xBB\xBF"))
+				first = false
+			}
 			if len(line) > 0 {
 				if werr := conn.writeText(line); werr != nil {
 					done <- "write: " + werr.Error()

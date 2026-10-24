@@ -87,13 +87,17 @@ func parentImagePath() string {
 }
 
 // restrictToCurrentUser removes inherited ACEs and grants full control to the
-// current user only.
+// current user only; directories pass the grant on to their contents.
 func restrictToCurrentUser(path string) error {
 	u, err := user.Current()
 	if err != nil {
 		return err
 	}
-	out, err := exec.Command("icacls", path, "/inheritance:r", "/grant:r", "*"+u.Uid+":(OI)(CI)F").CombinedOutput()
+	grant := "*" + u.Uid + ":F"
+	if st, err := os.Stat(path); err == nil && st.IsDir() {
+		grant = "*" + u.Uid + ":(OI)(CI)F"
+	}
+	out, err := exec.Command("icacls", path, "/inheritance:r", "/grant:r", grant).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("icacls %s: %v: %s", path, err, out)
 	}

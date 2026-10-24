@@ -1,3 +1,3 @@
 module github.com/gcol33/codex-tether
 
-go 1.26.2
+go 1.22
