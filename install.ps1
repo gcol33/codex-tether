@@ -64,7 +64,7 @@ param([switch]$Uninstall)
     # Binaries replaced while an app still ran them; each is deleted once
     # nothing has it open.
     function Remove-OldBinaries {
-        Get-ChildItem $dst -Filter 'codex-tether.exe.*.old' -ErrorAction SilentlyContinue |
+        Get-ChildItem $dst -Filter 'codex-tether.exe*.old' -ErrorAction SilentlyContinue |
             ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
     }
 
