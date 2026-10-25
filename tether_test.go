@@ -39,10 +39,10 @@ func TestIsStdioAppServer(t *testing.T) {
 func TestPackageFamilyFromPath(t *testing.T) {
 	cases := map[string]string{
 		`C:\Program Files\WindowsApps\OpenAI.Codex_26.1013.4894.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe`: "OpenAI.Codex_2p2nqsd0c76g0",
-		`C:/Program Files/WindowsApps/Foo.Bar_1.2.3.0_arm64__abc123/x.exe`:                             "Foo.Bar_abc123",
-		`C:\Program Files\Git\usr\bin\bash.exe`:                                                         "",
-		`C:\Program Files\WindowsApps`:                                                                  "",
-		`C:\Program Files\WindowsApps\NoPublisher_1.0\x.exe`:                                            "",
+		`C:/Program Files/WindowsApps/Foo.Bar_1.2.3.0_arm64__abc123/x.exe`:                            "Foo.Bar_abc123",
+		`C:\Program Files\Git\usr\bin\bash.exe`:                                                       "",
+		`C:\Program Files\WindowsApps`:                                                                "",
+		`C:\Program Files\WindowsApps\NoPublisher_1.0\x.exe`:                                          "",
 		"": "",
 	}
 	for in, want := range cases {

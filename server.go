@@ -31,6 +31,7 @@ type endpoint struct {
 }
 
 func serveShared(real string, args, env []string, stateDir string) int {
+	stopStaleServer(stateDir)
 	tokenFile := filepath.Join(stateDir, "token")
 	token, err := ensureToken(tokenFile)
 	if err != nil {
@@ -52,10 +53,12 @@ func serveShared(real string, args, env []string, stateDir string) int {
 	srvLog := io.MultiWriter(os.Stderr, log.Writer())
 	srv.Stdout = srvLog
 	srv.Stderr = srvLog
+	configureChild(srv)
 	if err := srv.Start(); err != nil {
 		log.Printf("start server: %v; running the app-server unshared", err)
 		return passthrough(real, args, env)
 	}
+	defer forwardSignals(srv.Process)()
 	log.Printf("server pid %d on %s", srv.Process.Pid, url)
 
 	srvDone := make(chan int, 1)
@@ -98,6 +101,27 @@ func serveShared(real string, args, env []string, stateDir string) int {
 		conn.close()
 		return code
 	}
+}
+
+// stopStaleServer stops a server whose codex-tether died without stopping
+// it, identified by the process ID and executable recorded in endpoint.json.
+func stopStaleServer(stateDir string) {
+	epPath := filepath.Join(stateDir, endpointFile)
+	b, err := os.ReadFile(epPath)
+	if err != nil {
+		return
+	}
+	var ep endpoint
+	if json.Unmarshal(b, &ep) != nil || processImage(ep.TetherPID) != "" {
+		return
+	}
+	if img := processImage(ep.ServerPID); img != "" && strings.EqualFold(filepath.Clean(img), filepath.Clean(ep.RealCLI)) {
+		if p, err := os.FindProcess(ep.ServerPID); err == nil {
+			log.Printf("stopping stale server pid %d", ep.ServerPID)
+			_ = p.Kill()
+		}
+	}
+	_ = os.Remove(epPath)
 }
 
 // liveEndpoint returns the published endpoint if its server answers /readyz.

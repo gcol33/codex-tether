@@ -1,11 +1,15 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
+	"sort"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -71,9 +75,17 @@ func killChildrenOnExit() error {
 	return nil
 }
 
-// parentImagePath returns the executable path of the parent process, or "".
-func parentImagePath() string {
-	h, _, _ := procOpenProcess.Call(processQueryLimitedInformation, 0, uintptr(os.Getppid()))
+// configureChild is a no-op on Windows: the job object covers every child.
+func configureChild(*exec.Cmd) {}
+
+// forwardSignals is a no-op on Windows, where the app ends its CLI by
+// terminating the process and the job object takes the children with it.
+func forwardSignals(*os.Process) func() { return func() {} }
+
+// processImage returns the executable path of process pid, or "" when it
+// does not exist or cannot be queried.
+func processImage(pid int) string {
+	h, _, _ := procOpenProcess.Call(processQueryLimitedInformation, 0, uintptr(pid))
 	if h == 0 {
 		return ""
 	}
@@ -84,6 +96,26 @@ func parentImagePath() string {
 		return ""
 	}
 	return syscall.UTF16ToString(buf[:n])
+}
+
+// bundledCLI returns the newest codex.exe the desktop app has staged under
+// %LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\; the app runs that copy rather
+// than the one inside its read-only package.
+func bundledCLI(string) (string, error) {
+	matches, _ := filepath.Glob(filepath.Join(os.Getenv("LOCALAPPDATA"), "OpenAI", "Codex", "bin", "*", "codex.exe"))
+	if len(matches) == 0 {
+		return "", errors.New(`no staged codex.exe under %LOCALAPPDATA%\OpenAI\Codex\bin (has the Codex app run once?)`)
+	}
+	sort.Slice(matches, func(i, j int) bool { return modTime(matches[i]).After(modTime(matches[j])) })
+	return matches[0], nil
+}
+
+func modTime(p string) time.Time {
+	st, err := os.Stat(p)
+	if err != nil {
+		return time.Time{}
+	}
+	return st.ModTime()
 }
 
 // restrictToCurrentUser removes inherited ACEs and grants full control to the
@@ -102,14 +134,4 @@ func restrictToCurrentUser(path string) error {
 		return fmt.Errorf("icacls %s: %v: %s", path, err, out)
 	}
 	return nil
-}
-
-func ensurePrivateDir(dir string) error {
-	if _, err := os.Stat(dir); err == nil {
-		return nil
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	return restrictToCurrentUser(dir)
 }

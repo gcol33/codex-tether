@@ -7,33 +7,82 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
-	"time"
 )
 
-const sandboxPackageFamilyVar = "CODEX_WINDOWS_SANDBOX_PACKAGE_FAMILY"
+const (
+	sandboxPackageFamilyVar = "CODEX_WINDOWS_SANDBOX_PACKAGE_FAMILY"
+	appCLIFile              = "app-cli"
+)
 
-// realCLI returns the newest codex.exe the desktop app has staged under
-// %LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\.
-func realCLI() (string, error) {
+// realCLI resolves the Codex binary codex-tether stands in for: the
+// CODEX_TETHER_REAL_CLI override, else the desktop app's own CLI (found from
+// the app process appExe, or the one recorded the last time the app ran),
+// else codex on PATH.
+func realCLI(stateDir, appExe string) (string, error) {
 	if p := strings.TrimSpace(os.Getenv(realCLIVar)); p != "" {
 		return p, nil
 	}
-	matches, _ := filepath.Glob(filepath.Join(os.Getenv("LOCALAPPDATA"), "OpenAI", "Codex", "bin", "*", "codex.exe"))
-	if len(matches) == 0 {
-		return "", errors.New(`no staged codex.exe under %LOCALAPPDATA%\OpenAI\Codex\bin (has the Codex app run once?)`)
+	recorded := filepath.Join(stateDir, appCLIFile)
+	p, bundledErr := bundledCLI(appExe)
+	if bundledErr == nil {
+		_ = os.WriteFile(recorded, []byte(p), 0o600)
+		return p, nil
 	}
-	sort.Slice(matches, func(i, j int) bool { return modTime(matches[i]).After(modTime(matches[j])) })
-	return matches[0], nil
+	if b, err := os.ReadFile(recorded); err == nil {
+		if p := executableIn(strings.TrimSpace(string(b))); p != "" {
+			return p, nil
+		}
+	}
+	if p, err := exec.LookPath("codex"); err == nil && !isSelf(p) {
+		return p, nil
+	}
+	return "", bundledErr
 }
 
-func modTime(p string) time.Time {
-	st, err := os.Stat(p)
-	if err != nil {
-		return time.Time{}
+// resourcesDir is the Electron resources directory of an app whose main
+// executable is exe: Contents/Resources in a macOS bundle, resources/ beside
+// the executable elsewhere.
+func resourcesDir(exe, goos string) string {
+	if goos == "darwin" {
+		return filepath.Join(filepath.Dir(exe), "..", "Resources")
 	}
-	return st.ModTime()
+	return filepath.Join(filepath.Dir(exe), "resources")
+}
+
+// appCLICandidates lists where the desktop app looks for its bundled CLI,
+// in the app's own order.
+func appCLICandidates(res string) []string {
+	return []string{
+		filepath.Join(res, "codex"),
+		filepath.Join(res, "app.asar.unpacked", "codex"),
+		filepath.Join(res, "codex-linux"),
+	}
+}
+
+// executableIn returns p, or p/codex when p is a directory, if that is a
+// regular file; otherwise "".
+func executableIn(p string) string {
+	if p == "" {
+		return ""
+	}
+	if st, err := os.Stat(p); err == nil && st.IsDir() {
+		p = filepath.Join(p, "codex")
+	}
+	if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() {
+		return p
+	}
+	return ""
+}
+
+func isSelf(p string) bool {
+	self, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	a, errA := filepath.EvalSymlinks(p)
+	b, errB := filepath.EvalSymlinks(self)
+	return errA == nil && errB == nil && strings.EqualFold(a, b)
 }
 
 // packageFamilyFromPath derives an MSIX package family name
@@ -116,7 +165,16 @@ func passthrough(real string, args, env []string) int {
 	cmd := exec.Command(real, args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	cmd.Env = env
-	if err := cmd.Run(); err != nil {
+	configureChild(cmd)
+	if err := cmd.Start(); err != nil {
+		log.Printf("run %s: %v", real, err)
+		fmt.Fprintln(os.Stderr, "codex-tether:", err)
+		return 1
+	}
+	stop := forwardSignals(cmd.Process)
+	err := cmd.Wait()
+	stop()
+	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
 			return ee.ExitCode()

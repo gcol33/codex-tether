@@ -1,11 +1,11 @@
 # codex-tether
 
-*one Codex conversation in the terminal and the Windows desktop app*
+*one Codex conversation in the terminal and the desktop app*
 
-codex-tether lets the Codex desktop app on Windows and the Codex terminal UI
-work on the same conversation at the same time. You can start a thread in a
-terminal over SSH, continue it in the app, and go back to the terminal, with
-both sides open.
+codex-tether lets the Codex desktop app and the Codex terminal UI work on the
+same conversation at the same time, on Windows, macOS and Linux. You can start
+a thread in a terminal over SSH, continue it in the app, and go back to the
+terminal, with both sides open.
 
 The app runs Codex through a background process called the app-server, which
 loads conversations and runs the agent. codex-tether sits between the app and
@@ -16,8 +16,8 @@ know before you type whether the thread is shared with the app.
 
 codex-tether supports:
 
-- **Resuming over SSH.** `codex-tether tui resume --last` in a Termius or
-  OpenSSH session opens the thread that is loaded in the app.
+- **Resuming over SSH.** `codex-tether tui resume --last` in an SSH session
+  opens the thread that is loaded in the app.
 - **Dropped connections.** The conversation stays loaded in the app's server
   when an SSH session drops, and a new terminal session resumes it.
 - **The app's own tools.** The shared server receives the app's arguments and
@@ -27,29 +27,42 @@ codex-tether supports:
 
 codex-tether uses options the Codex CLI already provides: the app-server's
 `--listen` with token authentication and the terminal UI's `--remote`. The app
-and the CLI stay unmodified, and `install.ps1 -Uninstall` restores the original
+and the CLI stay unmodified, and the uninstall step restores the original
 setup.
 
 ## Installation
 
-You need Windows, the Codex desktop app (started at least once) and
-[Go](https://go.dev/dl/) 1.22 or newer to build codex-tether. In a normal,
-non-elevated PowerShell:
+You need the Codex desktop app, started at least once, and
+[Go](https://go.dev/dl/) 1.22 or newer to build codex-tether.
 
-```powershell
+```sh
 git clone https://github.com/gcol33/codex-tether
 cd codex-tether
-.\install.ps1
 ```
 
-The script builds `codex-tether.exe`, copies it to
-`%LOCALAPPDATA%\codex-tether`, adds that folder to your PATH and sets
-`CODEX_CLI_PATH` so the app launches it. Quit the Codex app, including its tray
-icon, and start it again.
+Then run the installer for your system and restart the app. Quit it fully
+first, including the tray or menu bar icon.
 
-If you start the app from the Start menu or the taskbar, it inherits
-Explorer's environment, which may not have the new variable yet. Sign out and
-back in once.
+| System | Install | Uninstall |
+| --- | --- | --- |
+| Windows | `.\install.ps1` in a normal, non-elevated PowerShell | `.\install.ps1 -Uninstall` |
+| macOS, Linux | `./install.sh` | `./install.sh --uninstall` |
+
+The installer builds codex-tether, copies it to a folder on your PATH and sets
+`CODEX_CLI_PATH`, the variable the app reads to find its CLI:
+
+- **Windows**: `%LOCALAPPDATA%\codex-tether`, added to your user PATH;
+  `CODEX_CLI_PATH` is a user environment variable.
+- **macOS**: `~/.local/bin`; `CODEX_CLI_PATH` is set with `launchctl setenv`
+  and again at each login by a LaunchAgent.
+- **Linux**: `~/.local/bin`; `CODEX_CLI_PATH` is set in
+  `~/.config/environment.d/codex-tether.conf`, which the desktop session reads
+  at login.
+
+The app sees the new variable only when it is started from an environment
+that has it. On Windows, an app started from the Start menu or the taskbar may
+need one sign-out and sign-in first, and so may an app started from the Linux
+desktop.
 
 ## Usage
 
@@ -57,7 +70,7 @@ back in once.
 2. In a new terminal, local or over SSH, run `codex-tether tui` with the
    arguments you would give `codex`:
 
-   ```powershell
+   ```sh
    codex-tether tui resume --last
    ```
 
@@ -70,12 +83,12 @@ back in once.
    The thread is now open in both places, and messages from either side
    appear in the other.
 
-When the app is closed, `codex-tether tui` prints the reason and runs
-Codex locally, as plain `codex` would.
+When the app is closed, `codex-tether tui` prints the reason and runs Codex
+locally, as plain `codex` would.
 
 Other ways to call it:
 
-```powershell
+```sh
 codex-tether tui                    # new conversation
 codex-tether tui resume             # pick a conversation
 codex-tether tui --model gpt-5.5    # any other codex option
@@ -83,16 +96,21 @@ codex-tether tui --model gpt-5.5    # any other codex option
 
 ### Making it your `codex` command
 
-A function in your PowerShell profile (the file that `$PROFILE` names) sends
-every `codex` call through codex-tether:
+An alias in your shell's startup file sends every `codex` call through
+codex-tether. For bash or zsh (`~/.bashrc`, `~/.zshrc`):
+
+```sh
+alias codex='codex-tether tui'
+```
+
+For PowerShell, in the file that `$PROFILE` names:
 
 ```powershell
 function codex { codex-tether tui @args }
 ```
 
-In Git Bash, the same line is `alias codex='codex-tether tui'` in
-`~/.bashrc`. With `CODEX_TETHER_DISABLE` set to `1`, `codex-tether tui` runs
-Codex locally even while the app is running.
+With `CODEX_TETHER_DISABLE` set to `1`, `codex-tether tui` runs Codex locally
+even while the app is running.
 
 ### Other commands
 
@@ -105,16 +123,24 @@ Codex locally even while the app is running.
 
 The shared server runs a full Codex agent with the app's permissions. It
 listens on `127.0.0.1` and accepts a connection only with the token stored in
-`%USERPROFILE%\.codex\tether\token`, which only your user account can read.
-Other programs running as your user can read the token too, as they can
+`.codex/tether/token` in your home directory, which only your user account can
+read. Other programs running as your user can read the token too, as they can
 everything else under `.codex`.
 
 ## Compatibility
 
 codex-tether relies on the app reading `CODEX_CLI_PATH` and on the CLI options
-named above. It was tested with Codex desktop app 26.1013.4894.0 and its CLI
-0.163.0-alpha.10.2 (October 2026). codex-tether is an independent project,
-not affiliated with OpenAI.
+named above. On Windows it was tested with the Codex desktop app
+26.1013.4894.0 and its CLI 0.163.0-alpha.10.2 (October 2026). On macOS and
+Linux it was tested with a stand-in for the app laid out like the app's
+bundle, running Codex CLI 0.164.0; a test with the real macOS and Linux apps
+is still open.
+
+On macOS, a server whose codex-tether was killed outright keeps running until
+the app next starts its server, when codex-tether stops it. Windows and Linux
+stop it at once.
+
+codex-tether is an independent project, not affiliated with OpenAI.
 
 ## Documentation
 
@@ -127,16 +153,16 @@ terminal conflict, and what codex-tether runs in between.
 ## Getting help
 
 Report bugs on [GitHub issues](https://github.com/gcol33/codex-tether/issues),
-with the output of `codex-tether status` and the last lines of
-`%USERPROFILE%\.codex\tether\tether.log`.
+with your system, the output of `codex-tether status` and the last lines of
+`.codex/tether/tether.log` in your home directory.
 
 ## Support
 
 > "Software is like sex: it's better when it's free." — Linus Torvalds
 
-I'm a PhD student who builds R packages in my free time because I believe good tools should be free and open. I started these projects for my own work and figured others might find them useful too.
+I'm a PhD student who builds tools in my free time because I believe good tools should be free and open. I started these projects for my own work and figured others might find them useful too.
 
-If this package saved you some time, buying me a coffee is a nice way to say thanks. It helps with my coffee addiction.
+If this tool saved you some time, buying me a coffee is a nice way to say thanks. It helps with my coffee addiction.
 
 [![Buy Me A Coffee](https://img.shields.io/badge/-Buy%20me%20a%20coffee-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/gcol33)
 

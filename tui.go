@@ -13,7 +13,7 @@ const tokenEnvVar = "CODEX_TETHER_TOKEN"
 func runTUI(stateDir string, args []string) int {
 	ep, token, err := liveEndpoint(stateDir)
 	if err != nil || os.Getenv(disableVar) == "1" {
-		real, rerr := realCLI()
+		real, rerr := realCLI(stateDir, "")
 		if rerr != nil {
 			fmt.Fprintln(os.Stderr, "codex-tether:", rerr)
 			return 1

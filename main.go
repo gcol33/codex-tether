@@ -1,5 +1,5 @@
 // codex-tether stands in for the Codex desktop app's CLI binary
-// (CODEX_CLI_PATH) on Windows.
+// (CODEX_CLI_PATH) on Windows, macOS and Linux.
 //
 // When the app starts its stdio app-server, codex-tether starts the real
 // app-server on a token-protected loopback WebSocket instead and bridges the
@@ -63,13 +63,14 @@ func main() {
 		log.Printf("job object: %v", err)
 	}
 
-	real, err := realCLI()
+	appExe := processImage(os.Getppid())
+	real, err := realCLI(stateDir, appExe)
 	if err != nil {
 		log.Printf("resolve real cli: %v", err)
 		fmt.Fprintln(os.Stderr, "codex-tether:", err)
 		os.Exit(1)
 	}
-	env := childEnv(os.Environ(), parentImagePath())
+	env := childEnv(os.Environ(), appExe)
 
 	if os.Getenv(disableVar) == "1" || !isStdioAppServer(args) {
 		log.Printf("passthrough: %q", args)
@@ -79,8 +80,25 @@ func main() {
 	os.Exit(serveShared(real, args, env, stateDir))
 }
 
+// stateDirectory is tether/ inside the Codex home: CODEX_HOME when set,
+// otherwise .codex in the user's home directory.
 func stateDirectory() string {
-	return filepath.Join(os.Getenv("USERPROFILE"), ".codex", "tether")
+	home := os.Getenv("CODEX_HOME")
+	if home == "" {
+		h, _ := os.UserHomeDir()
+		home = filepath.Join(h, ".codex")
+	}
+	return filepath.Join(home, "tether")
+}
+
+func ensurePrivateDir(dir string) error {
+	if _, err := os.Stat(dir); err == nil {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return restrictToCurrentUser(dir)
 }
 
 func setupLog(stateDir string) {

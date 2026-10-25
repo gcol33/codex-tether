@@ -47,7 +47,12 @@ if (-not (Test-Path $src)) {
 
 New-Item -ItemType Directory -Force $dst | Out-Null
 if (-not (Test-Path $exe) -or (Get-FileHash $src).Hash -ne (Get-FileHash $exe).Hash) {
-    Copy-Item $src $exe -Force
+    # A running exe cannot be overwritten but can be renamed; the app keeps
+    # the old file until it restarts.
+    $old = "$exe.old"
+    Remove-Item $old -Force -ErrorAction SilentlyContinue
+    if (Test-Path $exe) { Move-Item $exe $old -Force }
+    Copy-Item $src $exe
 }
 [Environment]::SetEnvironmentVariable('CODEX_CLI_PATH', $exe, 'User')
 Set-UserPath $true
