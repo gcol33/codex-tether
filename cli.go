@@ -21,16 +21,22 @@ const (
 // else codex on PATH.
 func realCLI(stateDir, appExe string) (string, error) {
 	if p := strings.TrimSpace(os.Getenv(realCLIVar)); p != "" {
+		if isSelf(p) {
+			return "", fmt.Errorf("%s points at codex-tether itself", realCLIVar)
+		}
 		return p, nil
 	}
 	recorded := filepath.Join(stateDir, appCLIFile)
 	p, bundledErr := bundledCLI(appExe)
+	if bundledErr == nil && isSelf(p) {
+		bundledErr = fmt.Errorf("the app's CLI at %s is codex-tether itself", p)
+	}
 	if bundledErr == nil {
-		_ = os.WriteFile(recorded, []byte(p), 0o600)
+		_ = writeFileAtomic(recorded, []byte(p))
 		return p, nil
 	}
 	if b, err := os.ReadFile(recorded); err == nil {
-		if p := executableIn(strings.TrimSpace(string(b))); p != "" {
+		if p := executableIn(strings.TrimSpace(string(b))); p != "" && !isSelf(p) {
 			return p, nil
 		}
 	}
@@ -130,12 +136,18 @@ var valueFlags = map[string]bool{
 	"-a": true, "--ask-for-approval": true,
 }
 
+// infoFlags print something and exit instead of starting a server.
+var infoFlags = map[string]bool{"-h": true, "--help": true, "-V": true, "--version": true}
+
 // isStdioAppServer reports whether args launch the plain stdio app-server:
 // subcommand `app-server`, no nested subcommand, no explicit transport.
 func isStdioAppServer(args []string) bool {
 	i := 0
 	for ; i < len(args); i++ {
 		a := args[i]
+		if infoFlags[a] {
+			return false
+		}
 		if valueFlags[a] {
 			i++
 			continue
@@ -150,7 +162,7 @@ func isStdioAppServer(args []string) bool {
 	for j := i + 1; j < len(args); j++ {
 		a := args[j]
 		switch {
-		case a == "--listen" || strings.HasPrefix(a, "--listen=") || a == "--stdio":
+		case a == "--listen" || strings.HasPrefix(a, "--listen=") || a == "--stdio" || infoFlags[a]:
 			return false
 		case valueFlags[a]:
 			j++
@@ -171,7 +183,7 @@ func passthrough(real string, args, env []string) int {
 		fmt.Fprintln(os.Stderr, "codex-tether:", err)
 		return 1
 	}
-	stop := forwardSignals(cmd.Process)
+	stop := forwardSignals(cmd.Process, false)
 	err := cmd.Wait()
 	stop()
 	if err != nil {

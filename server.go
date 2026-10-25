@@ -15,29 +15,40 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
 
-const endpointFile = "endpoint.json"
+// Each shared server publishes server-<tether pid>.json and authenticates
+// with its own token-<tether pid>, so servers started close together never
+// share or overwrite each other's files.
+const (
+	serverFilePrefix = "server-"
+	tokenFilePrefix  = "token-"
+)
 
 type endpoint struct {
-	URL       string `json:"url"`
-	TokenFile string `json:"token_file"`
-	RealCLI   string `json:"real_cli"`
-	TetherPID int    `json:"tether_pid"`
-	ServerPID int    `json:"server_pid"`
-	Started   string `json:"started"`
+	URL         string `json:"url"`
+	TokenFile   string `json:"token_file"`
+	RealCLI     string `json:"real_cli"`
+	TetherPID   int    `json:"tether_pid"`
+	ServerPID   int    `json:"server_pid"`
+	ServerStart string `json:"server_start,omitempty"`
+	Started     string `json:"started"`
 }
 
 func serveShared(real string, args, env []string, stateDir string) int {
-	stopStaleServer(stateDir)
-	tokenFile := filepath.Join(stateDir, "token")
-	token, err := ensureToken(tokenFile)
+	cleanStaleServers(stateDir)
+	id := strconv.Itoa(os.Getpid())
+	tokenFile := filepath.Join(stateDir, tokenFilePrefix+id)
+	token, err := newToken(tokenFile)
 	if err != nil {
 		log.Printf("token: %v; running the app-server unshared", err)
 		return passthrough(real, args, env)
 	}
+	defer os.Remove(tokenFile)
 	port, err := freePort()
 	if err != nil {
 		log.Printf("port: %v; running the app-server unshared", err)
@@ -50,15 +61,18 @@ func serveShared(real string, args, env []string, stateDir string) int {
 		"--listen", url, "--ws-auth", "capability-token", "--ws-token-file", tokenFile)
 	srv := exec.Command(real, srvArgs...)
 	srv.Env = env
-	srvLog := io.MultiWriter(os.Stderr, log.Writer())
-	srv.Stdout = srvLog
-	srv.Stderr = srvLog
-	configureChild(srv)
+	out := teeWriter{os.Stderr, log.Writer()}
+	srv.Stdout, srv.Stderr = out, out
+	// Processes the server starts may inherit its output pipe and outlive it;
+	// Wait stops copying from the pipe this long after the server exits.
+	srv.WaitDelay = 2 * time.Second
+	configureServer(srv)
 	if err := srv.Start(); err != nil {
 		log.Printf("start server: %v; running the app-server unshared", err)
 		return passthrough(real, args, env)
 	}
-	defer forwardSignals(srv.Process)()
+	defer forwardSignals(srv.Process, true)()
+	defer stopServer(srv.Process)
 	log.Printf("server pid %d on %s", srv.Process.Pid, url)
 
 	srvDone := make(chan int, 1)
@@ -77,24 +91,30 @@ func serveShared(real string, args, env []string, stateDir string) int {
 
 	conn, err := dialUntilReady(addr, token, 60*time.Second, srvDone)
 	if err != nil {
-		log.Printf("connect: %v", err)
-		_ = srv.Process.Kill()
-		return 1
+		// Nothing has been read from the app yet, so it can still be served
+		// by a plain stdio app-server.
+		log.Printf("connect: %v; running the app-server unshared", err)
+		stopServer(srv.Process)
+		<-srvDone
+		return passthrough(real, args, env)
 	}
 
-	epPath := filepath.Join(stateDir, endpointFile)
+	epPath := filepath.Join(stateDir, serverFilePrefix+id+".json")
 	ep := endpoint{URL: url, TokenFile: tokenFile, RealCLI: real, TetherPID: os.Getpid(),
-		ServerPID: srv.Process.Pid, Started: time.Now().Format(time.RFC3339)}
+		ServerPID: srv.Process.Pid, ServerStart: processStart(srv.Process.Pid),
+		Started: time.Now().Format(time.RFC3339Nano)}
 	if b, err := json.MarshalIndent(ep, "", "  "); err == nil {
-		_ = os.WriteFile(epPath, b, 0o600)
+		if err := writeFileAtomic(epPath, b); err != nil {
+			log.Printf("publish endpoint: %v", err)
+		}
 	}
-	defer removeIfOurs(epPath)
+	defer os.Remove(epPath)
 
 	select {
 	case why := <-bridge(conn):
 		log.Printf("bridge closed: %s", why)
 		conn.close()
-		_ = srv.Process.Kill()
+		stopServer(srv.Process)
 		<-srvDone
 		return 0
 	case code := <-srvDone:
@@ -103,54 +123,87 @@ func serveShared(real string, args, env []string, stateDir string) int {
 	}
 }
 
-// stopStaleServer stops a server whose codex-tether died without stopping
-// it, identified by the process ID and executable recorded in endpoint.json.
-func stopStaleServer(stateDir string) {
-	epPath := filepath.Join(stateDir, endpointFile)
-	b, err := os.ReadFile(epPath)
-	if err != nil {
-		return
-	}
-	var ep endpoint
-	if json.Unmarshal(b, &ep) != nil || processImage(ep.TetherPID) != "" {
-		return
-	}
-	if img := processImage(ep.ServerPID); img != "" && strings.EqualFold(filepath.Clean(img), filepath.Clean(ep.RealCLI)) {
-		if p, err := os.FindProcess(ep.ServerPID); err == nil {
-			log.Printf("stopping stale server pid %d", ep.ServerPID)
-			_ = p.Kill()
+// cleanStaleServers removes the files of servers whose codex-tether is gone,
+// stopping the server too where it can outlive its codex-tether (macOS).
+func cleanStaleServers(stateDir string) {
+	files, _ := filepath.Glob(filepath.Join(stateDir, serverFilePrefix+"*.json"))
+	files = append(files, filepath.Join(stateDir, "endpoint.json"))
+	for _, f := range files {
+		ep, err := readEndpoint(f)
+		if err != nil {
+			continue
+		}
+		if processImage(ep.TetherPID) != "" {
+			continue
+		}
+		stopOrphanedServer(ep)
+		_ = os.Remove(f)
+		if ep.TokenFile != "" {
+			_ = os.Remove(ep.TokenFile)
 		}
 	}
-	_ = os.Remove(epPath)
+	_ = os.Remove(filepath.Join(stateDir, "token"))
+	tokens, _ := filepath.Glob(filepath.Join(stateDir, tokenFilePrefix+"*"))
+	for _, t := range tokens {
+		pid, err := strconv.Atoi(strings.TrimPrefix(filepath.Base(t), tokenFilePrefix))
+		if err == nil && processImage(pid) == "" {
+			_ = os.Remove(t)
+		}
+	}
 }
 
-// liveEndpoint returns the published endpoint if its server answers /readyz.
-func liveEndpoint(stateDir string) (*endpoint, string, error) {
-	b, err := os.ReadFile(filepath.Join(stateDir, endpointFile))
+func readEndpoint(path string) (endpoint, error) {
+	var ep endpoint
+	b, err := os.ReadFile(path)
 	if err != nil {
+		return ep, err
+	}
+	if err := json.Unmarshal(b, &ep); err != nil {
+		return ep, fmt.Errorf("bad %s: %v", filepath.Base(path), err)
+	}
+	return ep, nil
+}
+
+// liveEndpoint returns the most recently started published server that
+// answers /readyz, with its token.
+func liveEndpoint(stateDir string) (*endpoint, string, error) {
+	files, _ := filepath.Glob(filepath.Join(stateDir, serverFilePrefix+"*.json"))
+	var eps []endpoint
+	for _, f := range files {
+		if ep, err := readEndpoint(f); err == nil {
+			eps = append(eps, ep)
+		}
+	}
+	if len(eps) == 0 {
 		return nil, "", errors.New("no shared server (is the Codex app running with codex-tether?)")
 	}
-	var ep endpoint
-	if err := json.Unmarshal(b, &ep); err != nil {
-		return nil, "", fmt.Errorf("bad %s: %v", endpointFile, err)
-	}
+	sort.Slice(eps, func(i, j int) bool { return eps[i].Started > eps[j].Started })
+	var last error
 	client := http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get("http://" + strings.TrimPrefix(ep.URL, "ws://") + "/readyz")
-	if err != nil {
-		return nil, "", fmt.Errorf("shared server at %s not answering: %v", ep.URL, err)
+	for i := range eps {
+		ep := &eps[i]
+		resp, err := client.Get("http://" + strings.TrimPrefix(ep.URL, "ws://") + "/readyz")
+		if err != nil {
+			last = fmt.Errorf("shared server at %s not answering: %v", ep.URL, err)
+			continue
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			last = fmt.Errorf("shared server at %s not ready: %s", ep.URL, resp.Status)
+			continue
+		}
+		token, err := os.ReadFile(ep.TokenFile)
+		if err != nil {
+			last = err
+			continue
+		}
+		return ep, strings.TrimSpace(string(token)), nil
 	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("shared server at %s not ready: %s", ep.URL, resp.Status)
-	}
-	token, err := os.ReadFile(ep.TokenFile)
-	if err != nil {
-		return nil, "", err
-	}
-	return &ep, strings.TrimSpace(string(token)), nil
+	return nil, "", last
 }
 
 func printStatus(stateDir string) int {
+	fmt.Printf("codex-tether:  %s\n", version)
 	ep, _, err := liveEndpoint(stateDir)
 	if err != nil {
 		fmt.Println(err)
@@ -225,15 +278,15 @@ func bridge(conn *wsConn) chan string {
 	return done
 }
 
-func removeIfOurs(epPath string) {
-	b, err := os.ReadFile(epPath)
-	if err != nil {
-		return
+// teeWriter writes to every writer and never fails, so a closed stderr or an
+// unwritable log does not stop the server's output from being drained.
+type teeWriter []io.Writer
+
+func (t teeWriter) Write(p []byte) (int, error) {
+	for _, w := range t {
+		_, _ = w.Write(p)
 	}
-	var ep endpoint
-	if json.Unmarshal(b, &ep) == nil && ep.TetherPID == os.Getpid() {
-		_ = os.Remove(epPath)
-	}
+	return len(p), nil
 }
 
 func trimEOL(b []byte) []byte {
@@ -243,19 +296,47 @@ func trimEOL(b []byte) []byte {
 	return b
 }
 
-func ensureToken(path string) (string, error) {
-	if b, err := os.ReadFile(path); err == nil && len(strings.TrimSpace(string(b))) >= 32 {
-		return strings.TrimSpace(string(b)), restrictToCurrentUser(path)
-	}
+// newToken writes a fresh 32-byte random token to path, readable by the
+// current user only.
+func newToken(path string) (string, error) {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
 		return "", err
 	}
 	tok := hex.EncodeToString(buf)
-	if err := os.WriteFile(path, []byte(tok), 0o600); err != nil {
+	_ = os.Remove(path)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
 		return "", err
 	}
-	return tok, restrictToCurrentUser(path)
+	if err := restrictToCurrentUser(path); err != nil {
+		f.Close()
+		os.Remove(path)
+		return "", err
+	}
+	_, err = f.WriteString(tok)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(path)
+		return "", err
+	}
+	return tok, nil
+}
+
+// writeFileAtomic replaces path with data so that readers see either the old
+// or the new content, never a partial file.
+func writeFileAtomic(path string, data []byte) error {
+	tmp := path + ".tmp-" + strconv.Itoa(os.Getpid())
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 func freePort() (int, error) {

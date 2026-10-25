@@ -57,30 +57,40 @@ these with a full path.
 
 ## Starting the shared server
 
-For an app-server call, codex-tether:
+For an app-server call, codex-tether, with `<pid>` its own process ID:
 
-1. Stops a server left behind by an earlier codex-tether that was killed (see
-   below), if `endpoint.json` names one.
-2. Picks a free port on `127.0.0.1` and creates a 32-byte random token in
-   `~/.codex/tether/token`, if the file does not exist yet.
+1. Deletes the files of servers whose codex-tether is no longer running, and
+   on macOS stops such a server (see below).
+2. Picks a free port on `127.0.0.1` and writes a new 32-byte random token to
+   `~/.codex/tether/token-<pid>`.
 3. Starts the real CLI with the app's arguments, adding
    `--listen ws://127.0.0.1:<port> --ws-auth capability-token --ws-token-file <token file>`.
+   On macOS and Linux the server gets its own process group.
 4. Connects to the server as a WebSocket client with the token, retrying until
    the server accepts.
 5. Writes the server's address, the token file, the real CLI path and both
-   process IDs to `~/.codex/tether/endpoint.json`.
+   process IDs to `~/.codex/tether/server-<pid>.json`.
 6. Relays between the app and the server. Each line the app writes to
    codex-tether's standard input goes to the server as one WebSocket text
    message, and each message from the server goes back to the app as one line
    on standard output. A UTF-8 byte order mark at the start of standard input
    is dropped.
 
+If the server exits before step 4 succeeds, or does not accept a connection
+within 60 seconds, codex-tether stops it and runs the real CLI with the app's
+original arguments, so the app gets an ordinary unshared app-server. This
+happens, for example, when a CLI does not accept `--listen`.
+
+Because each server has its own token and files, two app-servers started at
+the same time do not interfere: each authenticates only with its own server,
+and terminal sessions use the most recently started one that is running.
+
 The server's own log output goes to codex-tether's standard error, which the
 app reads as its server log, and to `tether.log`.
 
 When the app closes the connection, codex-tether stops the server and deletes
-`endpoint.json`. When the server exits on its own, codex-tether exits with the
-server's exit code.
+its server and token files. When the server exits on its own, codex-tether
+exits with the server's exit code.
 
 ## Stopping the server with the app
 
@@ -88,17 +98,20 @@ A server that outlives its codex-tether would keep its conversations locked,
 so each system stops it with the app:
 
 - **Windows**: codex-tether runs inside a job object that ends all its
-  processes when codex-tether ends, however it ends. The job still lets a
-  process start detached children on purpose, as the `app-server daemon`
-  launcher does.
+  processes when codex-tether is terminated. The job still lets a process
+  start detached children on purpose, as the `app-server daemon` launcher
+  does. For calls other than the app-server, codex-tether releases the job
+  before it exits normally, so processes the CLI leaves running keep running,
+  as they would without codex-tether.
 - **Linux**: the server gets a parent-death signal, so the kernel kills it
   when codex-tether exits, including by `SIGKILL`. `SIGTERM` and `SIGHUP` sent
-  to codex-tether are passed on to the server.
-- **macOS**: `SIGTERM` and `SIGHUP` are passed on to the server. macOS has no
-  parent-death signal, so a server whose codex-tether was killed outright
-  keeps running until the next app-server call, when step 1 above stops it.
-  That step checks that the recorded process still runs the recorded CLI
-  before stopping it.
+  to codex-tether are passed on to the server's process group, and stopping
+  the server stops that whole group.
+- **macOS**: signals and stopping work on the process group as on Linux.
+  macOS has no parent-death signal, so a server whose codex-tether was killed
+  outright keeps running until the next app-server call, when step 1 above
+  stops it. That step first checks that the recorded process ID still runs
+  the recorded CLI and started at the recorded time.
 
 ## Environment passed to the server
 
@@ -113,9 +126,9 @@ for `codex-tether tui`, the variable is left out.
 
 ## Connecting a terminal session
 
-`codex-tether tui [args]` reads `endpoint.json` and asks the server's
-`/readyz` address whether it is ready. When it answers, codex-tether runs the
-CLI recorded in `endpoint.json`, the app's own copy, as
+`codex-tether tui [args]` reads the server files, newest first, and asks each
+server's `/readyz` address whether it is ready. With the first that answers,
+codex-tether runs the CLI recorded in its file, the app's own copy, as
 
 ```
 codex [args] --remote ws://127.0.0.1:<port> --remote-auth-token-env CODEX_TETHER_TOKEN
@@ -129,10 +142,12 @@ prints the reason and runs the real CLI locally with `[args]`.
 
 | Path | Content |
 | --- | --- |
-| `~/.codex/tether/token` | Token for connections to the shared server, readable by your user only. |
-| `~/.codex/tether/endpoint.json` | Address and process IDs of the running shared server. |
+| `~/.codex/tether/token-<pid>` | Token for connections to one shared server, readable by your user only. |
+| `~/.codex/tether/server-<pid>.json` | Address, CLI path and process IDs of one running shared server. |
 | `~/.codex/tether/app-cli` | Path of the app's CLI, from the last time the app started codex-tether. |
-| `~/.codex/tether/tether.log` | One line per CLI call and server event, plus the server's own log. |
+| `~/.codex/tether/tether.log` | One line per CLI call and server event, plus the server's own log. Moved to `tether.log.1` when it passes 8 MB. |
+
+`<pid>` is the process ID of the codex-tether that started the server.
 
 The installed binary is `%LOCALAPPDATA%\codex-tether\codex-tether.exe` on
 Windows and `~/.local/bin/codex-tether` on macOS and Linux.

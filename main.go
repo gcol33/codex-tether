@@ -22,7 +22,10 @@ const (
 	realCLIVar = "CODEX_TETHER_REAL_CLI"
 )
 
-const usage = `codex-tether: share the Codex desktop app's server with terminal sessions
+// version is set at release build time with -ldflags "-X main.version=...".
+var version = "dev"
+
+const usage = `codex-tether %s: share the Codex desktop app's server with terminal sessions
 
 Usage:
   codex-tether tui [codex args...]   start the Codex TUI attached to the app's server
@@ -51,7 +54,7 @@ func main() {
 			os.Exit(attach(stateDir))
 		case "-h", "--help", "help":
 			if len(args) == 1 {
-				fmt.Print(usage)
+				fmt.Printf(usage, version)
 				return
 			}
 		}
@@ -74,7 +77,9 @@ func main() {
 
 	if os.Getenv(disableVar) == "1" || !isStdioAppServer(args) {
 		log.Printf("passthrough: %q", args)
-		os.Exit(passthrough(real, args, env))
+		code := passthrough(real, args, env)
+		releaseChildren()
+		os.Exit(code)
 	}
 	log.Printf("shared app-server: %q (real %s)", args, real)
 	os.Exit(serveShared(real, args, env, stateDir))
@@ -101,9 +106,16 @@ func ensurePrivateDir(dir string) error {
 	return restrictToCurrentUser(dir)
 }
 
+// maxLogSize is the size at which tether.log is moved to tether.log.1.
+const maxLogSize = 8 << 20
+
 func setupLog(stateDir string) {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
-	f, err := os.OpenFile(filepath.Join(stateDir, "tether.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	path := filepath.Join(stateDir, "tether.log")
+	if st, err := os.Stat(path); err == nil && st.Size() > maxLogSize {
+		_ = os.Rename(path, path+".1")
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		log.SetOutput(io.Discard)
 		return

@@ -54,33 +54,64 @@ type extendedLimit struct {
 	PeakJobMemoryUsed     uintptr
 }
 
+var job uintptr
+
 // killChildrenOnExit puts this process in a job that kills every member when
-// its last handle (ours) closes. Children inherit the job and may still break
-// away explicitly, as the daemon launcher does.
+// its last handle (ours) closes, so terminating codex-tether also terminates
+// the real CLI behind it. Children inherit the job and may still break away
+// explicitly, as the daemon launcher does.
 func killChildrenOnExit() error {
-	job, _, err := procCreateJobObjectW.Call(0, 0)
-	if job == 0 {
+	h, _, err := procCreateJobObjectW.Call(0, 0)
+	if h == 0 {
 		return err
 	}
-	var info extendedLimit
-	info.Basic.LimitFlags = jobKillOnJobClose | jobBreakawayOK
-	if r, _, err := procSetInformationJobObject.Call(job, jobObjectExtendedLimitInformation,
-		uintptr(unsafe.Pointer(&info)), unsafe.Sizeof(info)); r == 0 {
+	if err := setJobLimits(h, jobKillOnJobClose|jobBreakawayOK); err != nil {
 		return err
 	}
 	self, _, _ := procGetCurrentProcess.Call()
-	if r, _, err := procAssignProcessToJobObject.Call(job, self); r == 0 {
+	if r, _, err := procAssignProcessToJobObject.Call(h, self); r == 0 {
+		return err
+	}
+	job = h
+	return nil
+}
+
+// releaseChildren lets processes the real CLI left behind keep running after
+// codex-tether exits normally, as they would had the app run the CLI itself.
+func releaseChildren() {
+	if job != 0 {
+		_ = setJobLimits(job, jobBreakawayOK)
+	}
+}
+
+func setJobLimits(h uintptr, flags uint32) error {
+	var info extendedLimit
+	info.Basic.LimitFlags = flags
+	if r, _, err := procSetInformationJobObject.Call(h, jobObjectExtendedLimitInformation,
+		uintptr(unsafe.Pointer(&info)), unsafe.Sizeof(info)); r == 0 {
 		return err
 	}
 	return nil
 }
 
-// configureChild is a no-op on Windows: the job object covers every child.
-func configureChild(*exec.Cmd) {}
+// configureChild and configureServer are no-ops on Windows: the job object
+// covers every child.
+func configureChild(*exec.Cmd)  {}
+func configureServer(*exec.Cmd) {}
 
 // forwardSignals is a no-op on Windows, where the app ends its CLI by
 // terminating the process and the job object takes the children with it.
-func forwardSignals(*os.Process) func() { return func() {} }
+func forwardSignals(*os.Process, bool) func() { return func() {} }
+
+// stopServer kills the server; the processes it started stay in the job and
+// end when codex-tether exits.
+func stopServer(p *os.Process) { _ = p.Kill() }
+
+// processStart is not recorded on Windows: the job object already stops a
+// server whose codex-tether is gone.
+func processStart(int) string { return "" }
+
+func stopOrphanedServer(endpoint) {}
 
 // processImage returns the executable path of process pid, or "" when it
 // does not exist or cannot be queried.

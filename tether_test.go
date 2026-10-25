@@ -27,6 +27,9 @@ func TestIsStdioAppServer(t *testing.T) {
 		{[]string{"-c", "forced_login_method=\"chatgpt\"", "exec-server", "--remote", "https://x"}, false},
 		{[]string{"resume", "--last"}, false},
 		{[]string{"-c", "app-server"}, false},
+		{[]string{"app-server", "--help"}, false},
+		{[]string{"--version"}, false},
+		{[]string{"-c", "x=1", "app-server", "-h"}, false},
 		{nil, false},
 	}
 	for _, c := range cases {

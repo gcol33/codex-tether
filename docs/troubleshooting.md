@@ -60,6 +60,6 @@ and restart the app.
 
 ## How do I remove codex-tether?
 
-Run the uninstall command from the repository folder and restart the app:
-`powershell -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall` on
-Windows, `./install.sh --uninstall` on macOS and Linux. The `tether` folder under `.codex` can be deleted afterwards.
+Run the uninstall command from the README's
+[Installation](../README.md#installation) section for your system and restart
+the app. The `tether` folder under `.codex` can be deleted afterwards.

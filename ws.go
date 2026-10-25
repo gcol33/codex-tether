@@ -19,6 +19,9 @@ import (
 
 const wsGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
+// maxFrameSize bounds the payload a frame header may announce.
+const maxFrameSize = 1 << 30
+
 const (
 	opContinuation = 0x0
 	opText         = 0x1
@@ -171,6 +174,10 @@ func readFrame(r io.Reader) (fin bool, op byte, payload []byte, err error) {
 		if _, err = io.ReadFull(r, mask[:]); err != nil {
 			return
 		}
+	}
+	if n > maxFrameSize {
+		err = fmt.Errorf("frame of %d bytes exceeds %d", n, maxFrameSize)
+		return
 	}
 	payload = make([]byte, n)
 	if _, err = io.ReadFull(r, payload); err != nil {
