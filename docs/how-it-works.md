@@ -1,104 +1,111 @@
 # How codex-tether works
 
-## The lock
+## Why the app and the terminal conflict
 
-Every Codex client (desktop app, TUI, IDE extension) talks to an app-server
-over JSON-RPC. The app-server that loads a thread takes that thread's writer
-lock in `%USERPROFILE%\.codex\thread-writer-locks\`. A second app-server that
-tries to load the same thread gets
+Every Codex client (the desktop app, the terminal UI, the IDE extension) sends
+its requests over JSON-RPC to an app-server, the process that loads
+conversations and runs the agent. When an app-server loads a conversation, it
+takes that conversation's writer lock, a file in
+`%USERPROFILE%\.codex\thread-writer-locks\`. Another app-server that tries to
+load the same conversation gets the error
 
 ```
 thread <id> already has an active writer
 ```
 
-which the TUI shows as "This conversation is open in another app". The desktop
-app starts its own app-server and the TUI starts another one, so the two always
-compete. Two clients connected to the same app-server do not: they share the
-loaded thread.
+and the terminal UI shows it as "This conversation is open in another app".
 
-On macOS and Linux the app can already attach to a shared local daemon
+The desktop app starts its own app-server, and the terminal UI starts another,
+so the two compete for every conversation they both open. Two clients
+connected to one app-server share the loaded conversation and never meet the
+lock. codex-tether makes the app's app-server that one server.
+
+On macOS and Linux the app can attach to a shared background server
 (`codex app-server daemon`) when `CODEX_APP_SERVER_USE_LOCAL_DAEMON=1` is set.
-The app skips that path on Windows, and it also skips it whenever it passes
-config overrides to its server, which it does to enable its own tools. The
-standalone daemon would also lack the app's tool connection
-(`CODEX_APP_TOOLS_PIPE_PATH`), which the app hands only to the server it starts
-itself.
+The app skips that route on Windows, and also whenever it passes configuration
+overrides to its server. That background server would also lack the
+connection to the app's tools (`CODEX_APP_TOOLS_PIPE_PATH`), which the app
+gives only to a server it starts itself.
 
-## Launch path
+## How the app starts codex-tether
 
-The app resolves its CLI binary from `CODEX_CLI_PATH` before falling back to
-the copy it stages under `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`.
-With codex-tether installed there, each CLI invocation from the app runs
-`codex-tether.exe` with the arguments meant for `codex.exe`.
+The app looks for its CLI in `CODEX_CLI_PATH` before it uses the copy it
+stages under `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`. `install.ps1`
+points `CODEX_CLI_PATH` at `codex-tether.exe`, so every CLI call the app makes
+runs codex-tether with the arguments meant for `codex.exe`.
 
-codex-tether decides per invocation:
+codex-tether shares a call that starts a plain stdio app-server: `codex`,
+optional global options, then `app-server` with no further subcommand and
+without `--listen` or `--stdio`. Every other call (`exec-server`,
+`app-server proxy` and the rest) runs the real CLI with the same arguments,
+input, output and environment, and codex-tether returns its exit code.
 
-- **Plain stdio app-server** (`codex [global options] app-server [options]`,
-  with no nested subcommand and no `--listen` or `--stdio`): share it, below.
-- **Anything else** (`exec-server`, `app-server daemon ...`, `app-server proxy`,
-  and so on): run the real binary with the same arguments, stdio and
-  environment, and return its exit code.
+The real CLI is the most recently written `codex.exe` in the app's staging
+folder. `CODEX_TETHER_REAL_CLI` overrides it with a full path.
 
-The real binary is the newest staged `codex.exe` under
-`%LOCALAPPDATA%\OpenAI\Codex\bin\`. `CODEX_TETHER_REAL_CLI` overrides it.
+## Starting the shared server
 
-## Sharing the app-server
+For an app-server call, codex-tether:
 
-1. Pick a free loopback port and make sure a 32-byte random token exists in
-   `%USERPROFILE%\.codex\tether\token`.
-2. Start the real binary with the app's arguments plus
-   `--listen ws://127.0.0.1:<port> --ws-auth capability-token --ws-token-file <token>`.
-3. Connect to it as a WebSocket client with `Authorization: Bearer <token>`,
-   retrying until the server accepts.
-4. Write `%USERPROFILE%\.codex\tether\endpoint.json` with the URL, token file,
-   real CLI path and process IDs.
-5. Relay: each line the app writes to stdin goes to the server as one text
-   message, and each message from the server goes to stdout as one line. A
-   UTF-8 byte order mark at the start of stdin is dropped. The server's own
-   stdout and stderr go to codex-tether's stderr, which the app reads as logs,
-   and to `tether.log`.
+1. Picks a free port on `127.0.0.1` and creates a 32-byte random token in
+   `%USERPROFILE%\.codex\tether\token`, if the file does not exist yet.
+2. Starts the real CLI with the app's arguments, adding
+   `--listen ws://127.0.0.1:<port> --ws-auth capability-token --ws-token-file <token file>`.
+3. Connects to the server as a WebSocket client with the token, retrying until
+   the server accepts.
+4. Writes the server's address, the token file, the real CLI path and both
+   process IDs to `%USERPROFILE%\.codex\tether\endpoint.json`.
+5. Relays between the app and the server. Each line the app writes to
+   codex-tether's standard input goes to the server as one WebSocket text
+   message, and each message from the server goes back to the app as one line
+   on standard output. A UTF-8 byte order mark at the start of standard input
+   is dropped.
 
-When the app closes stdin, codex-tether stops the server and removes the
-endpoint file. When the server exits, codex-tether exits with its code.
+The server's own log output goes to codex-tether's standard error, which the
+app reads as its server log, and to `tether.log`.
 
-## Environment
+When the app closes the connection, codex-tether stops the server and deletes
+`endpoint.json`. When the server exits on its own, codex-tether exits with the
+server's exit code.
 
-The app removes `CODEX_WINDOWS_SANDBOX_PACKAGE_FAMILY` from the environment
-when `CODEX_CLI_PATH` is set. codex-tether puts it back for every child,
-derived from the install folder of the process that launched it
-(`...\WindowsApps\<Name>_<Version>_<Arch>__<PublisherId>\...` gives
-`<Name>_<PublisherId>`). When the parent is not a packaged app, as for
-`codex-tether tui` run from a shell, nothing is added. Everything else the app
-sets, including `CODEX_APP_TOOLS_PIPE_PATH`, passes through unchanged.
+## Environment passed to the server
 
-## Process lifetime
+When `CODEX_CLI_PATH` is set, the app removes
+`CODEX_WINDOWS_SANDBOX_PACKAGE_FAMILY` from the environment it passes on. The
+Windows sandbox needs it, so codex-tether puts it back for every process it
+starts. The value comes from the install folder of the app that launched
+codex-tether: `...\WindowsApps\<Name>_<Version>_<Arch>__<PublisherId>\...`
+gives `<Name>_<PublisherId>`. When codex-tether is started from a shell, as
+for `codex-tether tui`, the variable is left out. Everything else the app
+sets, including `CODEX_APP_TOOLS_PIPE_PATH`, reaches the server unchanged.
 
-codex-tether places itself in a Windows job object with
-`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. Its children inherit the job, so when the
-app terminates what it believes is its CLI, the real server goes with it and
-cannot keep holding thread locks. `JOB_OBJECT_LIMIT_BREAKAWAY_OK` is set as
-well, so children that start detached processes on purpose (the app-server
-daemon launcher) still can.
+## Stopping the server with the app
 
-## Terminal side
+codex-tether runs inside a Windows job object that ends all its processes when
+codex-tether ends. The real server is one of them, so when the app stops what
+it takes for its CLI, the server stops too and releases its locks. The job
+still lets a process start detached children on purpose, as the
+`app-server daemon` launcher does.
 
-`codex-tether tui [args]` reads `endpoint.json` and checks the server's
-`/readyz`. When it answers, it runs the real CLI recorded there (the app's own
-CLI, so client and server versions match) as
+## Connecting a terminal session
+
+`codex-tether tui [args]` reads `endpoint.json` and asks the server's
+`/readyz` address whether it is ready. When it answers, codex-tether runs the
+CLI recorded in `endpoint.json`, the app's own copy, as
 
 ```
 codex.exe [args] --remote ws://127.0.0.1:<port> --remote-auth-token-env CODEX_TETHER_TOKEN
 ```
 
-with the token in `CODEX_TETHER_TOKEN`. The flags go before a `--` separator
-when there is one. When no server answers, it runs the real CLI with `[args]`
-locally.
+with the token in `CODEX_TETHER_TOKEN`. When `[args]` contain a `--`
+separator, the added options go before it. When no server answers, codex-tether
+prints the reason and runs the real CLI locally with `[args]`.
 
 ## Files
 
 | Path | Content |
 | --- | --- |
-| `%LOCALAPPDATA%\codex-tether\codex-tether.exe` | Installed binary (`CODEX_CLI_PATH`). |
-| `%USERPROFILE%\.codex\tether\token` | WebSocket capability token, user-only ACL. |
-| `%USERPROFILE%\.codex\tether\endpoint.json` | Address of the running shared server. |
-| `%USERPROFILE%\.codex\tether\tether.log` | One line per invocation and server lifecycle event, plus the server's own output. |
+| `%LOCALAPPDATA%\codex-tether\codex-tether.exe` | Installed binary, named by `CODEX_CLI_PATH`. |
+| `%USERPROFILE%\.codex\tether\token` | Token for connections to the shared server, readable by your user only. |
+| `%USERPROFILE%\.codex\tether\endpoint.json` | Address and process IDs of the running shared server. |
+| `%USERPROFILE%\.codex\tether\tether.log` | One line per CLI call and server event, plus the server's own log. |
