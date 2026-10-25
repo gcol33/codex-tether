@@ -32,37 +32,100 @@ setup.
 
 ## Installation
 
-You need the Codex desktop app, started at least once, and
-[Go](https://go.dev/dl/) 1.22 or newer to build codex-tether.
+Each system needs the Codex desktop app, started at least once, plus Git and
+[Go](https://go.dev/dl/) 1.22 or newer to build codex-tether. The installer
+copies codex-tether to a folder on your PATH and sets `CODEX_CLI_PATH`, the
+variable the app reads to find its CLI.
 
-```sh
-git clone https://github.com/gcol33/codex-tether
-cd codex-tether
-```
+### Windows
 
-Then run the installer for your system and restart the app. Quit it fully
-first, including the tray or menu bar icon.
+1. Install Git and Go if you do not have them:
+   `winget install Git.Git GoLang.Go`, then open a new terminal.
+2. In a normal PowerShell window (not "Run as administrator"):
 
-| System | Install | Uninstall |
-| --- | --- | --- |
-| Windows | `.\install.ps1` in a normal, non-elevated PowerShell | `.\install.ps1 -Uninstall` |
-| macOS, Linux | `./install.sh` | `./install.sh --uninstall` |
+   ```powershell
+   git clone https://github.com/gcol33/codex-tether
+   cd codex-tether
+   powershell -ExecutionPolicy Bypass -File .\install.ps1
+   ```
 
-The installer builds codex-tether, copies it to a folder on your PATH and sets
-`CODEX_CLI_PATH`, the variable the app reads to find its CLI:
+   This installs `%LOCALAPPDATA%\codex-tether\codex-tether.exe`, adds that
+   folder to your user PATH and sets `CODEX_CLI_PATH` for your user.
+   `-ExecutionPolicy Bypass` lets this one script run on systems that block
+   PowerShell scripts by default.
+3. Quit the Codex app, including its tray icon, then sign out of Windows and
+   back in. The app started from the Start menu or taskbar only sees the new
+   variable after that.
+4. Start the app and run `codex-tether status` in a new terminal. It prints
+   `shared server: ws://127.0.0.1:...` when everything works.
 
-- **Windows**: `%LOCALAPPDATA%\codex-tether`, added to your user PATH;
-  `CODEX_CLI_PATH` is a user environment variable.
-- **macOS**: `~/.local/bin`; `CODEX_CLI_PATH` is set with `launchctl setenv`
-  and again at each login by a LaunchAgent.
-- **Linux**: `~/.local/bin`; `CODEX_CLI_PATH` is set in
-  `~/.config/environment.d/codex-tether.conf`, which the desktop session reads
-  at login.
+To remove it, run `powershell -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall`
+in the repository folder and restart the app.
 
-The app sees the new variable only when it is started from an environment
-that has it. On Windows, an app started from the Start menu or the taskbar may
-need one sign-out and sign-in first, and so may an app started from the Linux
-desktop.
+### macOS
+
+1. Install Go if you do not have it: `brew install go`. Git comes with the
+   Xcode command line tools (`xcode-select --install`).
+2. In Terminal:
+
+   ```sh
+   git clone https://github.com/gcol33/codex-tether
+   cd codex-tether
+   ./install.sh
+   ```
+
+   This installs `~/.local/bin/codex-tether`, sets `CODEX_CLI_PATH` with
+   `launchctl setenv` for apps you start from now on, and adds a LaunchAgent
+   (`~/Library/LaunchAgents/com.github.gcol33.codex-tether.plist`) that sets
+   it again at each login.
+3. If the installer says `~/.local/bin` is not on your PATH, add this line to
+   `~/.zshrc` and open a new terminal:
+
+   ```sh
+   export PATH="$HOME/.local/bin:$PATH"
+   ```
+
+4. Quit the Codex app with Cmd-Q and start it again.
+5. Run `codex-tether status`. It prints `shared server: ws://127.0.0.1:...`
+   when everything works.
+
+To remove it, run `./install.sh --uninstall` in the repository folder and
+restart the app.
+
+### Linux
+
+1. Install Git and Go if you do not have them, for example
+   `sudo apt install git golang-go` on Debian and Ubuntu. Check that
+   `go version` prints 1.22 or newer; older distributions ship an older Go,
+   in which case install it from [go.dev](https://go.dev/dl/).
+2. In a terminal:
+
+   ```sh
+   git clone https://github.com/gcol33/codex-tether
+   cd codex-tether
+   ./install.sh
+   ```
+
+   This installs `~/.local/bin/codex-tether` and writes `CODEX_CLI_PATH` to
+   `~/.config/environment.d/codex-tether.conf`, which systemd-based desktops
+   (GNOME, KDE Plasma) read at login.
+3. If the installer says `~/.local/bin` is not on your PATH, add this line to
+   `~/.bashrc` (or `~/.zshrc`) and open a new terminal:
+
+   ```sh
+   export PATH="$HOME/.local/bin:$PATH"
+   ```
+
+4. Quit the Codex app, sign out and back in, and start the app again.
+5. Run `codex-tether status`. It prints `shared server: ws://127.0.0.1:...`
+   when everything works.
+
+On a desktop that does not read `environment.d`, start the app from a
+terminal with `CODEX_CLI_PATH="$HOME/.local/bin/codex-tether"` set in its
+environment.
+
+To remove it, run `./install.sh --uninstall` in the repository folder and
+restart the app.
 
 ## Usage
 
