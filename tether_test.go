@@ -30,6 +30,8 @@ func TestIsStdioAppServer(t *testing.T) {
 		{[]string{"app-server", "--help"}, false},
 		{[]string{"--version"}, false},
 		{[]string{"-c", "x=1", "app-server", "-h"}, false},
+		{[]string{"-c", "features.code_mode_host=true", "app-server", "--analytics-default-enabled",
+			"--print-startup-config", "--startup-client-info", `{"name":"codex_desktop"}`}, false},
 		{nil, false},
 	}
 	for _, c := range cases {

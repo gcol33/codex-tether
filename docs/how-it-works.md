@@ -38,7 +38,8 @@ call the app makes runs codex-tether with the arguments meant for the CLI.
 
 codex-tether shares a call that starts a plain stdio app-server: `codex`,
 optional global options, then `app-server` with no further subcommand and
-without `--listen` or `--stdio`. Every other call (`exec-server`,
+without `--listen`, `--stdio` or a print-and-exit option (`--help`,
+`--version`, `--print-startup-config`). Every other call (`exec-server`,
 `app-server proxy` and the rest) runs the real CLI with the same arguments,
 input, output and environment, and codex-tether returns its exit code.
 
@@ -46,7 +47,7 @@ codex-tether finds the real CLI the way the app does:
 
 | System | Real CLI |
 | --- | --- |
-| Windows | The most recently written `codex.exe` the app staged under `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\`. |
+| Windows | `codex.exe` in the `resources` folder beside the app's executable, inside its package. |
 | macOS | `codex` in the `Contents/Resources` folder of the app bundle that started codex-tether. |
 | Linux | `codex`, `app.asar.unpacked/codex` or `codex-linux/codex` in the `resources` folder beside the app's executable. |
 

@@ -137,7 +137,10 @@ var valueFlags = map[string]bool{
 }
 
 // infoFlags print something and exit instead of starting a server.
-var infoFlags = map[string]bool{"-h": true, "--help": true, "-V": true, "--version": true}
+var infoFlags = map[string]bool{
+	"-h": true, "--help": true, "-V": true, "--version": true,
+	"--print-startup-config": true,
+}
 
 // isStdioAppServer reports whether args launch the plain stdio app-server:
 // subcommand `app-server`, no nested subcommand, no explicit transport.

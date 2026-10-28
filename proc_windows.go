@@ -7,9 +7,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
-	"sort"
 	"syscall"
-	"time"
 	"unsafe"
 )
 
@@ -129,24 +127,18 @@ func processImage(pid int) string {
 	return syscall.UTF16ToString(buf[:n])
 }
 
-// bundledCLI returns the newest codex.exe the desktop app has staged under
-// %LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\; the app runs that copy rather
-// than the one inside its read-only package.
-func bundledCLI(string) (string, error) {
-	matches, _ := filepath.Glob(filepath.Join(os.Getenv("LOCALAPPDATA"), "OpenAI", "Codex", "bin", "*", "codex.exe"))
-	if len(matches) == 0 {
-		return "", errors.New(`no staged codex.exe under %LOCALAPPDATA%\OpenAI\Codex\bin (has the Codex app run once?)`)
+// bundledCLI returns the codex.exe in the resources folder of the app process
+// appExe, the copy shipped in the same package as the app and therefore
+// speaking its protocol version.
+func bundledCLI(appExe string) (string, error) {
+	if appExe == "" {
+		return "", errors.New("no desktop app process to locate its codex.exe from")
 	}
-	sort.Slice(matches, func(i, j int) bool { return modTime(matches[i]).After(modTime(matches[j])) })
-	return matches[0], nil
-}
-
-func modTime(p string) time.Time {
-	st, err := os.Stat(p)
-	if err != nil {
-		return time.Time{}
+	p := filepath.Join(resourcesDir(appExe, "windows"), "codex.exe")
+	if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() {
+		return p, nil
 	}
-	return st.ModTime()
+	return "", errors.New("no codex.exe in the resources of " + appExe)
 }
 
 // restrictToCurrentUser removes inherited ACEs and grants full control to the
