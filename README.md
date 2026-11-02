@@ -2,6 +2,10 @@
 
 *one Codex conversation in the terminal and the desktop app*
 
+<!-- badges: start -->
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+<!-- badges: end -->
+
 codex-tether lets the Codex desktop app and the Codex terminal UI work on the
 same conversation at the same time, on Windows, macOS and Linux. You can start
 a thread in a terminal over SSH, continue it in the app, and go back to the
@@ -130,6 +134,10 @@ cd codex-tether
 powershell -ExecutionPolicy Bypass -File .\install.ps1  # Windows
 ```
 
+`go install github.com/gcol33/codex-tether@latest` builds the binary into
+Go's bin directory without the installer. Set `CODEX_CLI_PATH` to its full
+path yourself, as the installer would, and restart the app.
+
 ## Usage
 
 1. Start the Codex desktop app.
@@ -231,10 +239,10 @@ with your system, the output of `codex-tether status` and the last lines of
 
 I'm a PhD student who builds tools in my free time because I believe good tools should be free and open. I started these projects for my own work and figured others might find them useful too.
 
-If this tool saved you some time, buying me a coffee is a nice way to say thanks. It helps with my coffee addiction.
+If this package saved you some time, buying me a coffee is a nice way to say thanks. It helps with my coffee addiction.
 
 [![Buy Me A Coffee](https://img.shields.io/badge/-Buy%20me%20a%20coffee-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/gcol33)
 
 ## License
 
-MIT
+codex-tether is licensed under MIT.
